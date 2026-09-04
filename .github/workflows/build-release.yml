@@ -1,0 +1,168 @@
+name: Build & Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: vue-cycling-app/package-lock.json
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: python-backend/requirements.txt
+
+      # ── Step 1: 构建 Vue 前端 ─────────────────────────────
+      - name: Build Vue frontend
+        working-directory: vue-cycling-app
+        run: |
+          npm ci
+          npm run build
+
+      # ── Step 2: 构建 Java 后端 JAR ────────────────────────
+      - name: Build Java backend JAR
+        working-directory: java-backend
+        run: mvn -B package -DskipTests
+
+      # ── Step 3: 打包 Python 后端 EXE ──────────────────────
+      - name: Build Python backend EXE
+        working-directory: python-backend
+        run: |
+          pip install -r requirements.txt pyinstaller
+          python -m PyInstaller python_backend.spec --clean --noconfirm
+
+      # ── Step 4: 下载 MariaDB 便携版 ───────────────────────
+      - name: Download MariaDB 10.11.6 portable
+        shell: pwsh
+        run: |
+          $url = 'https://archive.mariadb.org/mariadb-10.11.6/winx64-packages/mariadb-10.11.6-winx64.zip'
+          Invoke-WebRequest -Uri $url -OutFile mariadb.zip
+          Expand-Archive mariadb.zip -DestinationPath mariadb_tmp -Force
+          if (-not (Test-Path 'mariadb_tmp/mariadb-10.11.6-winx64/bin/mysqld.exe')) {
+            throw 'MariaDB download or extraction failed'
+          }
+
+      # ── Step 5: 下载 Temurin JRE 17 ──────────────────────
+      - name: Download Temurin JRE 17
+        shell: pwsh
+        run: |
+          $url = 'https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jre/hotspot/normal/eclipse'
+          Invoke-WebRequest -Uri $url -OutFile jre.zip
+          Expand-Archive jre.zip -DestinationPath jre_tmp -Force
+          $jre = (Get-ChildItem jre_tmp -Directory | Select-Object -First 1).FullName
+          if (-not (Test-Path "$jre/bin/java.exe")) {
+            throw 'JRE download or extraction failed'
+          }
+
+      # ── Step 6: 打包启动器 EXE ────────────────────────────
+      - name: Build launcher EXE
+        working-directory: launcher
+        run: |
+          pip install pyinstaller
+          python -m PyInstaller launcher.spec --clean --noconfirm
+
+      # ── Step 7: 组装发行包 ────────────────────────────────
+      - name: Assemble release package
+        shell: pwsh
+        run: |
+          $tag = if ($env:GITHUB_REF_NAME -like 'v*') { $env:GITHUB_REF_NAME } else { 'dev' }
+          $pkgName = "骑行装备数据分析系统_$tag"
+          $out = "package/$pkgName"
+
+          New-Item -ItemType Directory -Force -Path `
+            "$out/runtime/jre", "$out/runtime/mariadb", "$out/data/mysql", `
+            "$out/database", "$out/java-backend", "$out/python-backend", `
+            "$out/vue-dist" | Out-Null
+
+          # Vue 前端静态文件
+          Copy-Item vue-cycling-app/dist/* "$out/vue-dist/" -Recurse -Force
+
+          # Java 后端 JAR（跳过 original- 前缀的原始包）
+          $jar = Get-ChildItem java-backend/target/*.jar |
+                 Where-Object { $_.Name -notlike 'original-*' } |
+                 Select-Object -First 1
+          if (-not $jar) { throw 'JAR not found in java-backend/target' }
+          Copy-Item $jar.FullName "$out/java-backend/app.jar"
+
+          # Python 后端（onedir）
+          Copy-Item python-backend/dist/python_backend/* "$out/python-backend/" -Recurse -Force
+
+          # 数据库初始化脚本
+          Copy-Item database/complete_init.sql "$out/database/"
+
+          # JRE（Temurin 17）
+          $jre = (Get-ChildItem jre_tmp -Directory | Select-Object -First 1).FullName
+          Copy-Item "$jre/*" "$out/runtime/jre/" -Recurse -Force
+
+          # MariaDB 便携版
+          Copy-Item mariadb_tmp/mariadb-10.11.6-winx64/* "$out/runtime/mariadb/" -Recurse -Force
+
+          # 启动器 EXE 与使用说明（中文名，用通配符避免编码问题）
+          Copy-Item launcher/dist/*.exe "$out/"
+          Copy-Item launcher/使用说明.txt "$out/"
+
+          # 压缩
+          Compress-Archive -Path $out -DestinationPath "$pkgName.zip"
+          "Package: $((Get-Item "$pkgName.zip").FullName)"
+          "Size: {0:N1} MB" -f ((Get-Item "$pkgName.zip").Length / 1MB)
+
+      # ── 上传构建产物（手动触发时用于验证，不上传 Release）──
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: 骑行装备数据分析系统_*.zip
+          retention-days: 3
+          if-no-files-found: error
+
+      # ── 创建 Release 并上传发行包（仅 v* 标签触发时）─────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: 骑行装备数据分析系统_*.zip
+          generate_release_notes: true
+          body: |
+            ## 安装说明
+
+            1. 下载下方附件压缩包并解压
+            2. 双击 `启动系统.exe`，等待 1-2 分钟自动初始化（首次运行自动建库导数据）
+            3. 浏览器自动打开 http://localhost:5000
+
+            ## 零依赖设计
+
+            - 内置便携版 MariaDB 10.11.6（无需安装数据库）
+            - 内置 JRE 17（无需安装 Java）
+            - Python 后端为自包含 EXE（无需安装 Python）
+            - 前端为预构建静态文件（无需安装 Node.js）
+
+            ## 演示账号
+
+            - 用户名：`cyclist1@ljxz.com`　密码：`password`
+
+            ## 系统要求
+
+            - Windows 10/11 64 位，内存 ≥ 4GB，磁盘 ≥ 1.5GB
