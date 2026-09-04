@@ -348,7 +348,7 @@ class DataAnalysisService:
                     price_diff_percent = (price_diff / min_price) * 100 if min_price > 0 else 0
                     
                     price_comparison.append({
-                        'equipment_id': equipment_id,
+                        'equipment_id': int(equipment_id),
                         'name': equipment_name,
                         'min_price': round(min_price, 2),
                         'max_price': round(max_price, 2),

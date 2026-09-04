@@ -154,12 +154,21 @@ def init_sample_equipment():
                     name=equipment_data['name'],
                     brand=equipment_data['brand'],
                     model=equipment_data['model'],
-                    category=category.name,
+                    category_id=category.id,
                     description=equipment_data['description'],
                     specifications=equipment_data['specifications'],
-                    image_urls=equipment_data['images'],
-                    rating_avg=random.uniform(4.0, 5.0),
-                    rating_count=random.randint(10, 200)
+                    images=equipment_data['images'],
+                    tags=equipment_data['tags'],
+                    weight=equipment_data['weight'],
+                    material=equipment_data['material'],
+                    color_options=equipment_data['color_options'],
+                    size_options=equipment_data['size_options'],
+                    price=round(random.uniform(200, 8000), 2),
+                    rating=round(random.uniform(4.0, 5.0), 1),
+                    review_count=random.randint(10, 200),
+                    sales_count=random.randint(50, 500),
+                    source='sample',
+                    availability=True
                 )
                 
                 db.session.add(equipment)
@@ -173,10 +182,11 @@ def init_sample_equipment():
             db.session.rollback()
             raise
 
-def add_sample_prices(equipment_id):
+def add_sample_prices(equipment_id, base_price=None):
     """为装备添加示例价格数据"""
     platforms = ['taobao', 'jd']
-    base_price = random.uniform(100, 5000)
+    if base_price is None:
+        base_price = random.uniform(100, 5000)
     
     # 添加最近30天的价格数据
     for i in range(30):
@@ -253,6 +263,28 @@ def add_sample_reviews(equipment_id):
         
         db.session.add(review)
 
+def init_sample_prices():
+    """为所有缺少价格记录的装备生成示例价格历史（幂等）"""
+    with app.app_context():
+        try:
+            equipment_list = Equipment.query.all()
+            added = 0
+            for equipment in equipment_list:
+                existing = EquipmentPrice.query.filter_by(equipment_id=equipment.id).first()
+                if existing:
+                    continue
+                base_price = float(equipment.price) if equipment.price else None
+                add_sample_prices(equipment.id, base_price=base_price)
+                added += 1
+            
+            db.session.commit()
+            logger.info(f"价格数据初始化完成，为 {added} 个装备添加了示例价格")
+            
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"初始化价格数据失败: {str(e)}")
+            raise
+
 def check_categories():
     """检查分类数据是否存在"""
     with app.app_context():
@@ -277,6 +309,9 @@ def main():
     
     # 初始化装备数据
     init_sample_equipment()
+    
+    # 初始化价格历史数据
+    init_sample_prices()
     
     logger.info("示例数据初始化完成")
 

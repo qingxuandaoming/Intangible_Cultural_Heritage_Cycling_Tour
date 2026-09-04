@@ -769,7 +769,7 @@ class CrawlerService:
             # 检查是否已存在相同商品
             existing_equipment = Equipment.query.filter(
                 Equipment.name == cleaned_data['name'],
-                Equipment.platform_url == cleaned_data.get('platform_url')
+                Equipment.source_url == cleaned_data.get('platform_url')
             ).first()
             
             if existing_equipment:
@@ -779,21 +779,31 @@ class CrawlerService:
                 equipment_id = existing_equipment.id
                 logger.info(f"更新现有装备: {cleaned_data['name']}")
             else:
+                # 按分类名称查找分类ID，找不到时逐级回退
+                category_name = self._classify_equipment(cleaned_data['name'], cleaned_data.get('keyword', ''))
+                category = EquipmentCategory.query.filter_by(name=category_name).first()
+                if not category:
+                    category = EquipmentCategory.query.filter_by(name='骑行装备').first()
+                if not category:
+                    category = EquipmentCategory.query.first()
+                
+                if not category:
+                    logger.error("数据库中没有装备分类，无法保存爬取数据")
+                    db.session.rollback()
+                    return
+                
                 # 创建新商品
                 equipment = Equipment(
                     name=cleaned_data['name'],
-                    brand=cleaned_data.get('brand', ''),
-                    category=self._classify_equipment(cleaned_data['name'], cleaned_data.get('keyword', '')),
+                    brand=cleaned_data.get('brand') or '未知品牌',
+                    category_id=category.id,
                     price=cleaned_data['price'],
                     description=cleaned_data.get('description', ''),
-                    image_urls=[cleaned_data.get('image_url')] if cleaned_data.get('image_url') else [],
-                    purchase_urls=[{
-                        'platform': cleaned_data['platform'],
-                        'url': cleaned_data.get('platform_url', ''),
-                        'shop_name': cleaned_data.get('shop_name', '')
-                    }],
-                    rating_count=cleaned_data.get('sales', 0),
-                    platform_url=cleaned_data.get('platform_url', ''),
+                    images=[cleaned_data.get('image_url')] if cleaned_data.get('image_url') else [],
+                    review_count=cleaned_data.get('sales', 0) or 0,
+                    source=cleaned_data.get('platform') or 'unknown',
+                    source_url=cleaned_data.get('platform_url', ''),
+                    availability=True,
                     created_at=datetime.now(),
                     updated_at=datetime.now()
                 )
@@ -806,12 +816,13 @@ class CrawlerService:
             price_record = EquipmentPrice(
                 equipment_id=equipment_id,
                 platform=cleaned_data['platform'],
+                platform_url=cleaned_data.get('platform_url', ''),
                 price=cleaned_data['price'],
                 currency='CNY',
-                shop_name=cleaned_data.get('shop_name', ''),
-                shop_url=cleaned_data.get('shop_url', ''),
+                seller_name=cleaned_data.get('shop_name', ''),
+                stock_status='有货',
                 is_available=True,
-                recorded_at=datetime.now()
+                created_at=datetime.now()
             )
             db.session.add(price_record)
             

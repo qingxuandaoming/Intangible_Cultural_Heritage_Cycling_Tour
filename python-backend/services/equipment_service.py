@@ -168,9 +168,9 @@ class EquipmentService:
                 'brand': equipment.brand,
                 'model': equipment.model,
                 'category': {
-                    'id': equipment.category.id,
-                    'name': equipment.category.name
-                } if equipment.category else None,
+                    'id': equipment.category_obj.id,
+                    'name': equipment.category_obj.name
+                } if equipment.category_obj else None,
                 'description': equipment.description[:200] + '...' if len(equipment.description or '') > 200 else equipment.description,
                 'images': equipment.images[:1] if equipment.images else [],  # 只返回第一张图片
                 'tags': equipment.tags[:5] if equipment.tags else [],  # 只返回前5个标签
@@ -212,9 +212,9 @@ class EquipmentService:
                 'brand': equipment.brand,
                 'model': equipment.model,
                 'category': {
-                    'id': equipment.category.id,
-                    'name': equipment.category.name
-                } if equipment.category else None,
+                    'id': equipment.category_obj.id,
+                    'name': equipment.category_obj.name
+                } if equipment.category_obj else None,
                 'description': equipment.description,
                 'specifications': equipment.specifications,
                 'images': equipment.images,
